@@ -4,12 +4,10 @@ import requests
 
 # --- Configuration ---
 CLOUD_FUNCTION_URL = "http://20.57.11.23:8000/ingest-alert/"
-API_KEY = "your-secret-key-here-12345"
+API_KEY = "key"
 
 MISSING_TIMEOUT_SECONDS = 5
 MULTIPLE_ALERT_COOLDOWN = 5.0 # Your logic: 5 sec cooldown
-
-# Cooldown for the "Normal" state to fix flicker
 NORMAL_RESET_COOLDOWN = 3.0  # 3 seconds of "Normal" to reset alerts
 # -------------------------------------------------------------
 
@@ -63,9 +61,9 @@ if not cap.isOpened():
     print("Error: Cannot open webcam.")
     exit()
 
-print("Starting Edge Proctor (FINAL Robust Logic)... Press 'q' to quit.")
+print("Starting Edge Proctor (FINAL-FIX Robust Logic)... Press 'q' to quit.")
 
-# --- 2. State Variables (Robust Version) ---
+# --- State Variables (Robust Version) ---
 missing_start_time = None
 alert_sent_for_missing = False # Tracks the "Missing" alert state
 last_multiple_alert_time = 0.0 # Tracks the "Multiple" alert time
@@ -114,39 +112,43 @@ while True:
         
         # We are not normal, so reset the "normal" timer
         normal_start_time = None
+        # We also reset the missing timer, as you can't be
+        # "missing" and "multiple" at the same time.
+        missing_start_time = None 
 
         current_time = time.time()
         if (current_time - last_multiple_alert_time) > MULTIPLE_ALERT_COOLDOWN:
             print("LOG: Multiple people detected. Sending alert!")
             send_alert_to_cloud("MULTIPLE_PEOPLE", frame)
             last_multiple_alert_time = current_time
-        
-        # We DO NOT reset the 'missing' timer here. 
-        # The 'Normal' state will handle the full reset when the face returns.
 
     else:
-        # --- Normal Logic (face_count == 1) [THE FIX] ---
+        # --- Normal Logic (face_count == 1) [THE FINAL FIX] ---
         alert_message = "Normal"
-        alert_color = (0, 255, 0) # Green
+        alert_color = (0, 255, 0)
         
-        # This is the ONLY place the "missing" timer should be reset.
-        missing_start_time = None
+        # We are in a "Normal" state. We need to start a timer
+        # before we reset any "Missing" state variables.
         
-        # This is the FIX: Only reset the "missing" alert flag
-        # after we've been "Normal" for 3+ seconds.
-        if alert_sent_for_missing:
-            if normal_start_time is None:
+        if normal_start_time is None:
+            # We just entered "Normal" state. Start the timer.
+            # Only print this log if an alert was active
+            if alert_sent_for_missing or missing_start_time is not None:
                 print("LOG: Normal state detected. Starting reset cooldown timer...")
-                normal_start_time = time.time()
-            else:
-                elapsed_normal_time = time.time() - normal_start_time
-                if elapsed_normal_time > NORMAL_RESET_COOLDOWN:
-                    print(f"LOG: Normal for {elapsed_normal_time:.1f}s. Resetting 'Missing' alert.")
-                    alert_sent_for_missing = False
-                    normal_start_time = None
+            normal_start_time = time.time()
         else:
-            # No "missing" alert is active, so no need for the "normal" timer
-            normal_start_time = None
+            # We are *still* "Normal". Check how long.
+            elapsed_normal_time = time.time() - normal_start_time
+            if elapsed_normal_time > NORMAL_RESET_COOLDOWN:
+                # We have been "Normal" for 3+ seconds.
+                # NOW it is safe to reset the "Missing" state.
+                
+                if missing_start_time is not None or alert_sent_for_missing:
+                    print(f"LOG: Normal for {elapsed_normal_time:.1f}s. Resetting 'Missing' state.")
+                
+                # THIS IS THE FIX: These lines are now INSIDE the cooldown.
+                missing_start_time = None
+                alert_sent_for_missing = False
             
     # 5. Draw rectangles and text
     for (x, y, w, h) in faces:
